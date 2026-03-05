@@ -1,0 +1,52 @@
+name: Review Agent
+
+on:
+  projects_v2_item:
+    types: [edited]
+
+jobs:
+  review:
+    if: |
+      github.event.changes.field_value.field_name == 'Status' &&
+      github.event.changes.field_value.to.name == 'Review'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Review Agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the code review agent for the b2a pipeline.
+
+            Your job:
+            1. Run `gh issue view ${{ github.event.projects_v2_item.content_node_id }} --json title,body,comments,labels` to read the full issue and history.
+            2. Review the code changes related to this issue against the standards in CLAUDE.md.
+            3. Check for: correctness, edge cases, test coverage, code style, security issues.
+
+            If the implementation is acceptable:
+            - Post an approval comment on the issue.
+            - Move the card to "Testing":
+              ```
+              gh project item-edit \
+                --project-id PROJECT_ID \
+                --id ${{ github.event.projects_v2_item.node_id }} \
+                --field-id STATUS_FIELD_ID \
+                --single-select-option-id TESTING_OPTION_ID
+              ```
+              Refer to CLAUDE.md for the correct IDs.
+
+            If changes are required:
+            - Post a detailed comment on the issue listing every specific change needed.
+            - Determine the current cycle count from existing `cycles:N` labels and add the next label (e.g. if `cycles:1` exists, add `cycles:2`):
+              ```
+              gh issue label ${{ github.event.projects_v2_item.content_node_id }} --add "cycles:N"
+              ```
+            - Move the card back to "In Progress" using the In Progress option ID from CLAUDE.md.
+
+            Be specific in feedback. The implementation agent only has your comments to work from.
