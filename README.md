@@ -77,12 +77,46 @@ Adding a new stage = adding an entry to this file. No workflow changes needed.
 
 ## Onboarding a Repo
 
-Click "Onboard Repo" in the board UI to automatically create:
-- Status labels with colors
-- `.b2a/pipeline.yml`
-- `.github/workflows/b2a-agent.yml`
+To connect a GitHub repository to the b2a pipeline, complete these steps:
 
-You also need to set `CLAUDE_CODE_OAUTH_TOKEN` as a repository secret (run `claude setup-token` locally to generate it).
+### 1. Install the Claude Code GitHub App
+
+Go to [github.com/apps/claude](https://github.com/apps/claude) and install it on the organization or account that owns the target repo. Grant it access to the specific repo (or all repos).
+
+### 2. Set the `CLAUDE_CODE_OAUTH_TOKEN` secret
+
+This links the agent to your Claude subscription (no API key needed).
+
+1. Run `claude setup-token` in your terminal to generate an OAuth token
+2. Go to the repo's **Settings → Secrets and variables → Actions → New repository secret**
+3. Name: `CLAUDE_CODE_OAUTH_TOKEN`, Value: the token from step 1
+
+### 3. Create pipeline resources
+
+Click **"Onboard Repo"** in the board UI (http://localhost:3000). This automatically creates:
+
+- **Labels**: `status:planning` (blue), `status:in-progress` (orange), `status:review` (purple), `status:done` (green), `status:blocked` (red)
+- **Pipeline config**: `.b2a/pipeline.yml` — defines stages, prompts, models, and transitions
+- **Workflow**: `.github/workflows/b2a-agent.yml` — single unified workflow that reads the pipeline config
+
+Alternatively, you can create these manually by copying from this repo.
+
+### 4. Configure the board
+
+Set your `.env` file (in `board/`) to point at the target repo:
+
+```
+GITHUB_TOKEN=ghp_your_pat
+GITHUB_OWNER=your-org
+GITHUB_REPO=your-repo
+```
+
+### 5. Verify
+
+1. Create an issue in the target repo
+2. Drag it from **Todo** to **Planning** on the board
+3. Check that the `status:planning` label appears on the issue
+4. Check that the `b2a Agent` workflow fires in the repo's Actions tab
 
 ## Circuit Breaker
 

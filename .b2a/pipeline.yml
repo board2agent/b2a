@@ -24,11 +24,12 @@ pipeline:
          ```
 
       Do not advance until the plan is posted.
-      If the issue is unclear or you cannot create a plan:
+      If the issue is unclear, you cannot create a plan, or you encounter repeated permission denials or errors:
          ```
+         gh issue comment $ISSUE --body "Moving to blocked: <explain the reason>"
          gh issue edit $ISSUE --remove-label "status:planning" --add-label "status:blocked"
          ```
-      and explain why in a comment.
+      Do not retry the same failing action more than twice. If something is denied or broken, move to blocked immediately.
 
   - id: in-progress
     label: "status:in-progress"
@@ -53,11 +54,12 @@ pipeline:
          ```
 
       Do not advance until the implementation is complete and committed.
-      If you cannot complete the task:
+      If you cannot complete the task, encounter repeated permission denials, or hit errors you cannot resolve:
          ```
+         gh issue comment $ISSUE --body "Moving to blocked: <explain the reason>"
          gh issue edit $ISSUE --remove-label "status:in-progress" --add-label "status:blocked"
          ```
-      and explain why in a comment.
+      Do not retry the same failing action more than twice. If something is denied or broken, move to blocked immediately.
 
   - id: review
     label: "status:review"
@@ -96,6 +98,13 @@ pipeline:
         ```
 
       Be specific in feedback. The implementation agent only has your comments to work from.
+
+      If you encounter repeated permission denials or errors you cannot resolve:
+         ```
+         gh issue comment $ISSUE --body "Moving to blocked: <explain the reason>"
+         gh issue edit $ISSUE --remove-label "status:review" --add-label "status:blocked"
+         ```
+      Do not retry the same failing action more than twice. If something is denied or broken, move to blocked immediately.
 
 columns:
   - id: todo
