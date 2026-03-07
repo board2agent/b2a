@@ -143,7 +143,7 @@ jobs:
           echo "prompt<<EOF" >> "\$GITHUB_OUTPUT"
           echo "\$STAGE" | yq -r '.prompt' | sed "s/\\$ISSUE/\${{ github.event.issue.number }}/g" >> "\$GITHUB_OUTPUT"
           echo "EOF" >> "\$GITHUB_OUTPUT"
-          BREAKER=$(echo "\$STAGE" | yq -r '.circuit_breaker // empty')
+          BREAKER=$(echo "\$STAGE" | yq -r '.circuit_breaker // ""')
           echo "circuit_breaker=\$BREAKER" >> "\$GITHUB_OUTPUT"
 
       - name: Check circuit breaker
