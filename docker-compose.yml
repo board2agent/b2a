@@ -8,3 +8,8 @@ services:
       - GITHUB_OWNER=${GITHUB_OWNER}
       - GITHUB_REPO=${GITHUB_REPO}
       - POLL_INTERVAL_MS=5000
+
+  hello:
+    build: ./hello
+    ports:
+      - "8080:8080"
