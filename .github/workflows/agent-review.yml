@@ -25,28 +25,33 @@ jobs:
             You are the code review agent for the b2a pipeline.
 
             Your job:
-            1. Run `gh issue view ${{ github.event.projects_v2_item.content_node_id }} --json title,body,comments,labels` to read the full issue and history.
+            1. Read this issue fully, including all comments and history.
             2. Review the code changes related to this issue against the standards in CLAUDE.md.
-            3. Check for: correctness, edge cases, test coverage, code style, security issues.
+            3. Run the test suite (check CLAUDE.md for the test command). All tests must pass.
+            4. Check for: correctness, edge cases, test coverage, code style, security issues.
+            5. Run smoke tests or playwright tests if available.
 
             If the implementation is acceptable:
             - Post an approval comment on the issue.
-            - Move the card to "Testing":
+            - Move the card to "Done":
               ```
               gh project item-edit \
-                --project-id PROJECT_ID \
-                --id ${{ github.event.projects_v2_item.node_id }} \
-                --field-id STATUS_FIELD_ID \
-                --single-select-option-id TESTING_OPTION_ID
+                --project-id "${{ vars.PROJECT_ID }}" \
+                --id "${{ github.event.projects_v2_item.node_id }}" \
+                --field-id "${{ vars.STATUS_FIELD_ID }}" \
+                --single-select-option-id "${{ vars.STATUS_DONE }}"
               ```
-              Refer to CLAUDE.md for the correct IDs.
 
             If changes are required:
             - Post a detailed comment on the issue listing every specific change needed.
-            - Determine the current cycle count from existing `cycles:N` labels and add the next label (e.g. if `cycles:1` exists, add `cycles:2`):
+            - Determine the current cycle count from existing `cycles:N` labels and add the next label (e.g. if `cycles:1` exists, add `cycles:2`).
+            - Move the card back to "In Progress":
               ```
-              gh issue label ${{ github.event.projects_v2_item.content_node_id }} --add "cycles:N"
+              gh project item-edit \
+                --project-id "${{ vars.PROJECT_ID }}" \
+                --id "${{ github.event.projects_v2_item.node_id }}" \
+                --field-id "${{ vars.STATUS_FIELD_ID }}" \
+                --single-select-option-id "${{ vars.STATUS_IN_PROGRESS }}"
               ```
-            - Move the card back to "In Progress" using the In Progress option ID from CLAUDE.md.
 
             Be specific in feedback. The implementation agent only has your comments to work from.

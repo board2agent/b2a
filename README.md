@@ -6,7 +6,7 @@
 
 ## Overview
 
-**b2a** is a GitHub-native agentic pipeline where a Kanban board (GitHub Projects) drives autonomous Claude Code agents via GitHub Actions. A human moves a card from Backlog to In Progress to start the pipeline. From that point, specialised Claude agents handle each subsequent stage autonomously — implementing, reviewing, testing, and closing work — communicating via issue comments and moving cards between columns when their stage is complete.
+**b2a** is a GitHub-native agentic pipeline where a Kanban board (GitHub Projects) drives autonomous Claude Code agents via GitHub Actions. A human moves a card from Todo to Planning to start the pipeline. From that point, specialised Claude agents handle each subsequent stage autonomously — planning, implementing, reviewing, and closing work — communicating via issue comments and moving cards between columns when their stage is complete.
 
 There is no custom infrastructure. The entire system is GitHub Actions + the official `anthropics/claude-code-action` + the `gh` CLI.
 
@@ -20,9 +20,9 @@ b2a/
 ├── README.md                          # This file
 └── .github/
     └── workflows/
+        ├── agent-plan.yml             # Triggered when card moves to "Planning"
         ├── agent-implement.yml        # Triggered when card moves to "In Progress"
         ├── agent-review.yml           # Triggered when card moves to "Review"
-        ├── agent-test.yml             # Triggered when card moves to "Testing"
         └── agent-blocked.yml          # Triggered when circuit breaker fires or card moves to "Blocked"
 ```
 
@@ -32,10 +32,10 @@ b2a/
 
 |Column     |Trigger              |Actor                         |
 |-----------|---------------------|------------------------------|
-|Backlog    |None                 |Human adds cards here         |
-|In Progress|`agent-implement.yml`|Implementation agent          |
-|Review     |`agent-review.yml`   |Review agent                  |
-|Testing    |`agent-test.yml`     |Test agent                    |
+|Todo       |None                 |Human adds cards here         |
+|Planning   |`agent-plan.yml`     |Planning agent (Opus)         |
+|In Progress|`agent-implement.yml`|Implementation agent (Sonnet) |
+|Review     |`agent-review.yml`   |Review agent (Sonnet)         |
 |Done       |None                 |Final state, no workflow fires|
 |Blocked    |`agent-blocked.yml`  |Notifies human, halts pipeline|
 
@@ -418,6 +418,7 @@ Build in this order:
 
 ## Known Limitations & Notes
 
+- **Organization required**: The `projects_v2_item` workflow trigger is only available for **organization-owned repositories**. It does not work for user-owned repositories (e.g. `username/repo`). If you use a personal repo, GitHub Actions will reject the trigger with "Unexpected value 'projects_v2_item'". To use this pipeline, create a free GitHub organization and host the repo there. Organizations are free and require no purchase — they are simply a grouping of repos with access to org-level features like project board webhook events.
 - `projects_v2_item` triggers require the workflow to be on the default branch to fire
 - Field IDs are stable but option IDs can change if columns are deleted and recreated — keep CLAUDE.md updated
 - The `gh project item-edit` command syntax may require `--project-id` to be the numeric project number rather than the node ID depending on `gh` version — verify with `gh project list`

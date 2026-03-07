@@ -14,9 +14,17 @@ jobs:
       issues: write
 
     steps:
+      - name: Resolve issue number
+        id: issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_NUMBER=$(gh api graphql -f query='{ node(id: "${{ github.event.projects_v2_item.content_node_id }}") { ... on Issue { number } } }' --jq '.data.node.number')
+          echo "number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+
       - name: Notify human
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue comment ${{ github.event.projects_v2_item.content_node_id }} \
-            --body "🚨 This card has been moved to **Blocked** and requires human intervention. Please review the issue history, resolve the blocker, and move the card to the appropriate column to resume the pipeline."
+          gh issue comment "${{ steps.issue.outputs.number }}" \
+            --body "This card has been moved to **Blocked** and requires human intervention. Please review the issue history, resolve the blocker, and move the card to the appropriate column to resume the pipeline."

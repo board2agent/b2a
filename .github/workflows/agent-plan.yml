@@ -1,0 +1,57 @@
+name: Planning Agent
+
+on:
+  projects_v2_item:
+    types: [edited]
+
+jobs:
+  plan:
+    if: |
+      github.event.changes.field_value.field_name == 'Status' &&
+      github.event.changes.field_value.to.name == 'Planning'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Planning Agent
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_MODEL: claude-opus-4-6
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the planning agent for the b2a pipeline.
+
+            Your job:
+            1. Read this issue fully to understand what needs to be done.
+            2. Analyse the codebase to understand the current architecture and relevant code.
+            3. Create a detailed implementation plan covering:
+               - Which files need to be created or modified
+               - What changes are needed in each file
+               - Edge cases and potential pitfalls
+               - Testing strategy (unit tests, integration tests)
+               - Any dependencies or prerequisites
+            4. Post the implementation plan as a comment on the issue.
+            5. Move the project card to "In Progress":
+               ```
+               gh project item-edit \
+                 --project-id "${{ vars.PROJECT_ID }}" \
+                 --id "${{ github.event.projects_v2_item.node_id }}" \
+                 --field-id "${{ vars.STATUS_FIELD_ID }}" \
+                 --single-select-option-id "${{ vars.STATUS_IN_PROGRESS }}"
+               ```
+
+            Do not move the card until the plan is posted.
+            If the issue is unclear or you cannot create a plan, move the card to "Blocked":
+               ```
+               gh project item-edit \
+                 --project-id "${{ vars.PROJECT_ID }}" \
+                 --id "${{ github.event.projects_v2_item.node_id }}" \
+                 --field-id "${{ vars.STATUS_FIELD_ID }}" \
+                 --single-select-option-id "${{ vars.STATUS_BLOCKED }}"
+               ```
+            and explain why in a comment.

@@ -4,13 +4,13 @@ This repository implements the **board-to-agent pipeline** — a GitHub-native s
 
 ## How It Works
 
-A human moves a card from **Backlog → In Progress** to start the pipeline. Agents then handle each stage:
+A human moves a card from **Todo -> Planning** to start the pipeline. Agents then handle each stage:
 
-- **In Progress** → Implementation agent codes the solution
-- **Review** → Review agent checks the code
-- **Testing** → Test agent runs the suite
-- **Done** → Pipeline complete
-- **Blocked** → Human intervention required
+1. **Planning** -> Planning agent (Opus) analyses the issue and posts an implementation plan
+2. **In Progress** -> Implementation agent (Sonnet) codes the solution
+3. **Review** -> Review agent (Sonnet) does code review, runs tests, and smoke/playwright tests
+4. **Done** -> Pipeline complete
+- **Blocked** -> Human intervention required (at any stage)
 
 ## Stack
 
@@ -59,40 +59,26 @@ All agents must:
 
 ## Project Board
 
-Update this section after creating the GitHub Project. Retrieve IDs with:
+All project board IDs are stored as **repository variables** (accessible in workflows via `vars.*`):
 
+| Variable | Description |
+|---|---|
+| `PROJECT_ID` | GitHub Project V2 ID |
+| `STATUS_FIELD_ID` | Status field ID |
+| `STATUS_TODO` | Todo option ID |
+| `STATUS_PLANNING` | Planning option ID |
+| `STATUS_IN_PROGRESS` | In Progress option ID |
+| `STATUS_REVIEW` | Review option ID |
+| `STATUS_DONE` | Done option ID |
+| `STATUS_BLOCKED` | Blocked option ID |
+
+To move a card in a workflow, use:
 ```bash
-gh project list --owner YOUR_ORG_OR_USER
-
-gh api graphql -f query='
-{
-  node(id: "PROJECT_NODE_ID") {
-    ... on ProjectV2 {
-      fields(first: 20) {
-        nodes {
-          ... on ProjectV2SingleSelectField {
-            id
-            name
-            options { id name }
-          }
-        }
-      }
-    }
-  }
-}'
-```
-
-```
-Project ID:        PVT_xxxxxxxxxxxx   (replace after setup)
-Status Field ID:   PVTSSF_xxxxxxxxxxxx (replace after setup)
-
-Column option IDs:
-  Backlog:      xxxxxxxxxxxx
-  In Progress:  xxxxxxxxxxxx
-  Review:       xxxxxxxxxxxx
-  Testing:      xxxxxxxxxxxx
-  Done:         xxxxxxxxxxxx
-  Blocked:      xxxxxxxxxxxx
+gh project item-edit \
+  --project-id "${{ vars.PROJECT_ID }}" \
+  --id "<ITEM_NODE_ID>" \
+  --field-id "${{ vars.STATUS_FIELD_ID }}" \
+  --single-select-option-id "${{ vars.STATUS_<COLUMN> }}"
 ```
 
 ## Circuit Breaker
@@ -115,4 +101,4 @@ brew install act
 act -W .github/workflows/agent-blocked.yml
 ```
 
-Note: `projects_v2_item` triggers cannot be replicated locally with `act`. Use the GitHub UI to test card movement triggers.
+Agent workflows are triggered automatically via `projects_v2_item` events when a card's Status field changes on the project board. Each agent moves the card to the next column using `gh project item-edit` when its stage is complete. To set the model, use the `ANTHROPIC_MODEL` environment variable on the step. This trigger requires the repo to be owned by a GitHub organization.
