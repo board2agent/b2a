@@ -1,0 +1,82 @@
+name: Implementation Agent
+
+on:
+  projects_v2_item:
+    types: [edited]
+
+jobs:
+  implement:
+    if: |
+      github.event.changes.field_value.field_name == 'Status' &&
+      github.event.changes.field_value.to.name == 'In Progress'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check circuit breaker
+        id: breaker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_NUMBER="${{ github.event.projects_v2_item.content_node_id }}"
+
+          # Count cycles: labels on the issue
+          CYCLES=$(gh issue view "$ISSUE_NUMBER" --json labels \
+            --jq '[.labels[].name | select(startswith("cycles:"))] | length')
+
+          echo "cycles=$CYCLES" >> "$GITHUB_OUTPUT"
+
+          if [ "$CYCLES" -gt "3" ]; then
+            echo "tripped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tripped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Move to Blocked if circuit breaker tripped
+        if: steps.breaker.outputs.tripped == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_NUMBER="${{ github.event.projects_v2_item.content_node_id }}"
+
+          gh project item-edit \
+            --project-id "${{ secrets.PROJECT_ID }}" \
+            --id "${{ github.event.projects_v2_item.node_id }}" \
+            --field-id STATUS_FIELD_ID \
+            --single-select-option-id BLOCKED_OPTION_ID
+
+          gh issue comment "$ISSUE_NUMBER" \
+            --body "⚠️ Circuit breaker tripped after 3 review cycles. Moving to Blocked for human review."
+
+      - name: Run Implementation Agent
+        if: steps.breaker.outputs.tripped == 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the implementation agent for the b2a pipeline.
+
+            Your job:
+            1. Run `gh issue view ${{ github.event.projects_v2_item.content_node_id }} --json title,body,comments,labels` to read the full issue context including any previous review feedback.
+            2. Implement the changes described in the issue. Follow the standards in CLAUDE.md.
+            3. If there is prior review feedback in the issue comments, address all of it before proceeding.
+            4. Write or update tests as appropriate.
+            5. Commit your changes with a meaningful commit message referencing the issue number (format: `type: description (#NUMBER)`).
+            6. Post a comment on the issue summarising what you did.
+            7. Move the project card to the "Review" column:
+               ```
+               gh project item-edit \
+                 --project-id PROJECT_ID \
+                 --id ITEM_NODE_ID \
+                 --field-id STATUS_FIELD_ID \
+                 --single-select-option-id REVIEW_OPTION_ID
+               ```
+               Refer to CLAUDE.md for the correct IDs.
+
+            Do not move the card to Review until the implementation is complete and committed.
+            If you cannot complete the task, move the card to "Blocked" using the Blocked option ID from CLAUDE.md and explain why in a comment.

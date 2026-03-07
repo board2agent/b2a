@@ -1,0 +1,22 @@
+name: Blocked Notification
+
+on:
+  projects_v2_item:
+    types: [edited]
+
+jobs:
+  notify:
+    if: |
+      github.event.changes.field_value.field_name == 'Status' &&
+      github.event.changes.field_value.to.name == 'Blocked'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Notify human
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ github.event.projects_v2_item.content_node_id }} \
+            --body "🚨 This card has been moved to **Blocked** and requires human intervention. Please review the issue history, resolve the blocker, and move the card to the appropriate column to resume the pipeline."
