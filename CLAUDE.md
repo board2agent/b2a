@@ -1,24 +1,66 @@
 # b2a
 
-This repository implements the **board-to-agent pipeline** — a GitHub-native system where a Kanban board (GitHub Projects v2) drives autonomous Claude Code agents via GitHub Actions.
+This repository implements the **board-to-agent pipeline** — a custom Kanban board that drives autonomous Claude Code agents via GitHub Actions. The board applies `status:*` labels to issues, which trigger a unified agent workflow.
 
 ## How It Works
 
-A human moves a card from **Todo -> Planning** to start the pipeline. Agents then handle each stage:
+A human drags a card on the board to start the pipeline. The board applies labels, which trigger agents:
 
-1. **Planning** -> Planning agent (Opus) analyses the issue and posts an implementation plan
-2. **In Progress** -> Implementation agent (Sonnet) codes the solution
-3. **Review** -> Review agent (Sonnet) does code review, runs tests, and smoke/playwright tests
-4. **Done** -> Pipeline complete
-- **Blocked** -> Human intervention required (at any stage)
+1. **Todo** -> Human adds issues here (no label, no workflow)
+2. **Planning** -> `status:planning` label triggers Planning agent (Opus) to analyse and plan
+3. **In Progress** -> `status:in-progress` label triggers Implementation agent (Sonnet) to code
+4. **Review** -> `status:review` label triggers Review agent (Sonnet) to review, test, and approve/reject
+5. **Done** -> Pipeline complete (issue closed)
+- **Blocked** -> `status:blocked` label notifies human for intervention
+
+## Architecture
+
+```
+board/ (Next.js)          .b2a/pipeline.yml         .github/workflows/b2a-agent.yml
+┌──────────────┐          ┌─────────────────┐       ┌──────────────────────┐
+│ Drag card    │──label──>│ Stage config    │<──read─│ Single workflow      │
+│ between cols │          │ (prompts,models)│       │ (matches label to    │
+│              │<─poll────│                 │       │  stage, runs agent)  │
+└──────────────┘          └─────────────────┘       └──────────────────────┘
+```
+
+- **Board UI** (`board/`): Next.js Kanban board running in Docker. Applies/removes `status:*` labels via GitHub API.
+- **Pipeline config** (`.b2a/pipeline.yml`): Defines stages, prompts, models, and transitions. The single source of truth.
+- **Unified workflow** (`.github/workflows/b2a-agent.yml`): One workflow handles all stages by reading the pipeline config at runtime.
 
 ## Stack
 
-- Shell scripts (bash) for any helper logic
-- GitHub Actions for orchestration
-- `gh` CLI for all GitHub API interactions
-- `anthropics/claude-code-action@v1` for agent runs
-- Tests: (update this when the project has a test suite — e.g. `npm test`, `make test`, `pytest`)
+- **Board**: Next.js 14 (TypeScript, Tailwind CSS, @hello-pangea/dnd)
+- **Orchestration**: GitHub Actions + `anthropics/claude-code-action@v1`
+- **Pipeline config**: YAML (`.b2a/pipeline.yml`)
+- **API**: GitHub REST API via `@octokit/rest` (board) and `gh` CLI (agents)
+- **Runtime**: Docker Compose (local), GitHub Actions (CI)
+
+## Running Locally
+
+```bash
+# Copy env template and fill in your values
+cp .env.example .env
+
+# Start the board
+docker compose up
+
+# Board available at http://localhost:3000
+```
+
+Required env vars:
+- `GITHUB_TOKEN` — Personal Access Token with `repo` scope
+- `GITHUB_OWNER` — GitHub org or username
+- `GITHUB_REPO` — Repository name
+
+## Onboarding a Repo
+
+The board has an "Onboard Repo" button that creates:
+1. Status labels (`status:planning`, `status:in-progress`, `status:review`, `status:done`, `status:blocked`)
+2. Pipeline config (`.b2a/pipeline.yml`)
+3. Unified workflow (`.github/workflows/b2a-agent.yml`)
+
+The repo also needs `CLAUDE_CODE_OAUTH_TOKEN` set as a repository secret.
 
 ## Conventions
 
@@ -29,10 +71,6 @@ type: description (#ISSUE_NUMBER)
 ```
 
 Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
-
-Examples:
-- `feat: add user authentication (#12)`
-- `fix: handle null response from API (#7)`
 
 ### Branches
 
@@ -51,35 +89,28 @@ Examples:
 All agents must:
 
 1. Always read the full issue (including comments) before taking any action
-2. Post a comment on the issue explaining what was done before moving the card
-3. Move the card to the next column only after completing their stage
+2. Post a comment on the issue explaining what was done before advancing
+3. Advance the pipeline by swapping labels (`gh issue edit --remove-label ... --add-label ...`)
 4. Reference the issue number in all commits
 5. Never force-push or rewrite history
-6. If blocked or uncertain, move the card to **Blocked** and explain why in a comment
+6. If blocked or uncertain, swap to `status:blocked` and explain why in a comment
 
-## Project Board
+## Pipeline Config
 
-All project board IDs are stored as **repository variables** (accessible in workflows via `vars.*`):
+The pipeline is defined in `.b2a/pipeline.yml`. Each stage maps a label to a prompt, model, and transition:
 
-| Variable | Description |
-|---|---|
-| `PROJECT_ID` | GitHub Project V2 ID |
-| `STATUS_FIELD_ID` | Status field ID |
-| `STATUS_TODO` | Todo option ID |
-| `STATUS_PLANNING` | Planning option ID |
-| `STATUS_IN_PROGRESS` | In Progress option ID |
-| `STATUS_REVIEW` | Review option ID |
-| `STATUS_DONE` | Done option ID |
-| `STATUS_BLOCKED` | Blocked option ID |
-
-To move a card in a workflow, use:
-```bash
-gh project item-edit \
-  --project-id "${{ vars.PROJECT_ID }}" \
-  --id "<ITEM_NODE_ID>" \
-  --field-id "${{ vars.STATUS_FIELD_ID }}" \
-  --single-select-option-id "${{ vars.STATUS_<COLUMN> }}"
+```yaml
+pipeline:
+  - id: planning
+    label: "status:planning"
+    model: "claude-opus-4-6"
+    next: "status:in-progress"
+    blocked: "status:blocked"
+    prompt: |
+      You are the planning agent...
 ```
+
+To add a new stage, add an entry to `pipeline.yml`. No workflow changes needed.
 
 ## Circuit Breaker
 
@@ -90,15 +121,3 @@ When resolving a blocked card:
 2. Remove all `cycles:` labels from the issue
 3. Update the issue body or add a comment clarifying the correct approach
 4. Move the card back to **In Progress**
-
-## Running Workflows Locally (for debugging)
-
-```bash
-# Install act for local Actions testing
-brew install act
-
-# Run a specific workflow
-act -W .github/workflows/agent-blocked.yml
-```
-
-Agent workflows are triggered automatically via `projects_v2_item` events when a card's Status field changes on the project board. Each agent moves the card to the next column using `gh project item-edit` when its stage is complete. To set the model, use the `ANTHROPIC_MODEL` environment variable on the step. This trigger requires the repo to be owned by a GitHub organization.

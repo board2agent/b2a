@@ -1,0 +1,17 @@
+# env files
+.env
+.env.*
+!.env.example
+
+# dependencies
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+
+# Docker
+*.log

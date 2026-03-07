@@ -1,0 +1,66 @@
+name: b2a Agent
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Match stage
+        id: stage
+        run: |
+          LABEL="${{ github.event.label.name }}"
+          STAGE=$(yq -r ".pipeline[] | select(.label == \"$LABEL\")" .b2a/pipeline.yml)
+          if [ -z "$STAGE" ] || [ "$STAGE" = "null" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "model=$(echo "$STAGE" | yq -r '.model')" >> "$GITHUB_OUTPUT"
+          echo "prompt<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$STAGE" | yq -r '.prompt' | sed "s/\$ISSUE/${{ github.event.issue.number }}/g" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          BREAKER=$(echo "$STAGE" | yq -r '.circuit_breaker // empty')
+          echo "circuit_breaker=$BREAKER" >> "$GITHUB_OUTPUT"
+
+      - name: Check circuit breaker
+        if: steps.stage.outputs.skip == 'false' && steps.stage.outputs.circuit_breaker != ''
+        id: breaker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MAX="${{ steps.stage.outputs.circuit_breaker }}"
+          CYCLES=$(gh issue view "${{ github.event.issue.number }}" --json labels \
+            --jq "[.labels[].name | select(startswith(\"cycles:\"))] | length")
+          if [ "$CYCLES" -gt "$MAX" ]; then
+            gh issue edit "${{ github.event.issue.number }}" \
+              --remove-label "${{ github.event.label.name }}" --add-label "status:blocked"
+            gh issue comment "${{ github.event.issue.number }}" \
+              --body "Circuit breaker tripped after $MAX review cycles. Moving to Blocked."
+            echo "tripped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tripped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Agent
+        if: steps.stage.outputs.skip == 'false' && steps.breaker.outputs.tripped != 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_MODEL: ${{ steps.stage.outputs.model }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: ${{ steps.stage.outputs.prompt }}

@@ -1,426 +1,142 @@
 # b2a — Board-to-Agent Pipeline
 
-## Implementation Specification
+A custom Kanban board that drives autonomous Claude Code agents via GitHub Actions. Drag a card between columns, and agents handle planning, implementation, and review automatically.
 
------
-
-## Overview
-
-**b2a** is a GitHub-native agentic pipeline where a Kanban board (GitHub Projects) drives autonomous Claude Code agents via GitHub Actions. A human moves a card from Todo to Planning to start the pipeline. From that point, specialised Claude agents handle each subsequent stage autonomously — planning, implementing, reviewing, and closing work — communicating via issue comments and moving cards between columns when their stage is complete.
-
-There is no custom infrastructure. The entire system is GitHub Actions + the official `anthropics/claude-code-action` + the `gh` CLI.
-
------
-
-## Repository Structure
-
-```
-b2a/
-├── CLAUDE.md                          # Project context, coding standards, conventions
-├── README.md                          # This file
-└── .github/
-    └── workflows/
-        ├── agent-plan.yml             # Triggered when card moves to "Planning"
-        ├── agent-implement.yml        # Triggered when card moves to "In Progress"
-        ├── agent-review.yml           # Triggered when card moves to "Review"
-        └── agent-blocked.yml          # Triggered when circuit breaker fires or card moves to "Blocked"
-```
-
------
-
-## Kanban Board Columns
-
-|Column     |Trigger              |Actor                         |
-|-----------|---------------------|------------------------------|
-|Todo       |None                 |Human adds cards here         |
-|Planning   |`agent-plan.yml`     |Planning agent (Opus)         |
-|In Progress|`agent-implement.yml`|Implementation agent (Sonnet) |
-|Review     |`agent-review.yml`   |Review agent (Sonnet)         |
-|Done       |None                 |Final state, no workflow fires|
-|Blocked    |`agent-blocked.yml`  |Notifies human, halts pipeline|
-
------
-
-## GitHub Projects Setup
-
-### Project Configuration
-
-- Create a GitHub Project (Projects v2) linked to the b2a repository
-- Add a **Status** single-select field with the column values listed above
-- Each project item must be linked to a GitHub Issue in the b2a repo — this is how agents access work context
-
-### Webhook / Trigger Mechanism
-
-GitHub Actions supports `projects_v2_item.edited` as a workflow trigger. Each workflow file watches for a card moving to its specific column.
-
-```yaml
-on:
-  projects_v2_item:
-    types: [edited]
-```
-
-Each workflow filters on the `status` field change to its target column name.
-
------
-
-## Authentication & Secrets
-
-### Required Secrets (set in repo Settings → Secrets → Actions)
-
-|Secret                   |Description                                                                                                   |
-|-------------------------|--------------------------------------------------------------------------------------------------------------|
-|`CLAUDE_CODE_OAUTH_TOKEN`|Generated locally by running `claude setup-token`. Uses your Claude Pro/Max subscription — no API key billing.|
-|`PROJECT_ID`             |The GitHub Projects v2 node ID (obtain via GraphQL or `gh project list`)                                      |
-
-### GitHub Token
-
-`GITHUB_TOKEN` is automatically available in every Actions run. No setup needed. The `gh` CLI uses it automatically for issue reads, comments, and project card mutations.
-
-### Initial Setup
-
-Run the following from your terminal to configure the GitHub App and secrets in one step:
+## Quick Start
 
 ```bash
-claude
-/install-github-app
+# Clone and configure
+git clone https://github.com/board2agent/b2a.git
+cd b2a
+cp .env.example .env
+# Edit .env with your GitHub PAT, owner, and repo
+
+# Start the board
+docker compose up
+
+# Open http://localhost:3000
 ```
 
-This guides you through installing the Anthropic GitHub App on your repo and storing the OAuth token.
+## How It Works
 
------
+```
+┌─────────┐    ┌──────────┐    ┌─────────────┐    ┌────────┐    ┌──────┐
+│  Todo   │───>│ Planning │───>│ In Progress │───>│ Review │───>│ Done │
+│         │    │  (Opus)  │    │  (Sonnet)   │    │(Sonnet)│    │      │
+└─────────┘    └──────────┘    └─────────────┘    └────────┘    └──────┘
+  human          agent            agent             agent
+  drags          plans            codes             reviews
+                                                      │
+                                                      ├──> approve -> Done
+                                                      └──> reject  -> In Progress
+```
 
-## Workflow Files
+1. **You** drag a card from Todo to Planning
+2. The board applies `status:planning` label via GitHub API
+3. GitHub Actions fires the unified workflow
+4. The workflow reads `.b2a/pipeline.yml` to find the right prompt and model
+5. Claude agent runs, does its work, swaps labels to advance the pipeline
+6. The board polls GitHub and updates automatically
 
-### Shared Pattern
+## Architecture
 
-All four workflow files follow the same structure:
+| Component | Purpose |
+|---|---|
+| `board/` | Next.js Kanban board (Docker Compose) |
+| `.b2a/pipeline.yml` | Pipeline config — stages, prompts, models |
+| `.github/workflows/b2a-agent.yml` | Single unified workflow for all stages |
 
-1. Filter the trigger to the correct column
-1. Extract the issue number from the project item
-1. Check out the repo
-1. Run `anthropics/claude-code-action@v1` with a column-specific prompt
-1. Claude uses `gh` CLI internally to read issue context, make commits, move the card, and post comments
+### Why Labels?
 
-### `agent-implement.yml`
+GitHub Projects `projects_v2_item` doesn't work as an Actions trigger (despite being documented). Labels on issues (`issues: [labeled]`) are the reliable alternative. The board abstracts this away — you just drag cards.
+
+## Pipeline Config
+
+The pipeline is defined in `.b2a/pipeline.yml`:
 
 ```yaml
-name: Implementation Agent
+pipeline:
+  - id: planning
+    label: "status:planning"
+    color: "#0052CC"
+    model: "claude-opus-4-6"
+    next: "status:in-progress"
+    prompt: |
+      You are the planning agent...
 
-on:
-  projects_v2_item:
-    types: [edited]
-
-jobs:
-  implement:
-    if: github.event.changes.field_value.field_name == 'Status' &&
-        github.event.changes.field_value.to.name == 'In Progress'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check circuit breaker
-        id: breaker
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_NUMBER: ${{ github.event.projects_v2_item.content_node_id }}
-        run: |
-          # Extract issue number from node id and check review-cycle label count
-          # If cycles > 3, move card to Blocked and exit
-          CYCLES=$(gh issue view $ISSUE_NUMBER --json labels \
-            --jq '[.labels[].name | select(startswith("cycles:"))] | length')
-          echo "cycles=$CYCLES" >> $GITHUB_OUTPUT
-          if [ "$CYCLES" -gt "3" ]; then
-            echo "tripped=true" >> $GITHUB_OUTPUT
-          else
-            echo "tripped=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Move to Blocked if circuit breaker tripped
-        if: steps.breaker.outputs.tripped == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh project item-edit \
-            --project-id ${{ secrets.PROJECT_ID }} \
-            --id ${{ github.event.projects_v2_item.node_id }} \
-            --field-id STATUS_FIELD_ID \
-            --single-select-option-id BLOCKED_OPTION_ID
-          gh issue comment $ISSUE_NUMBER \
-            --body "⚠️ Circuit breaker tripped after 3 review cycles. Moving to Blocked for human review."
-
-      - name: Run Implementation Agent
-        if: steps.breaker.outputs.tripped == 'false'
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            You are the implementation agent for the b2a pipeline.
-
-            Your job:
-            1. Run `gh issue view ${{ github.event.projects_v2_item.content_node_id }} --json title,body,comments,labels` to read the full issue context including any previous review feedback
-            2. Implement the changes described in the issue. Follow the standards in CLAUDE.md.
-            3. If there is prior review feedback in the issue comments, address all of it before proceeding.
-            4. Write or update tests as appropriate.
-            5. Commit your changes with a meaningful commit message referencing the issue number.
-            6. Post a comment on the issue summarising what you did.
-            7. Move the project card to the "Review" column using the gh CLI.
-
-            Do not move the card to Review until the implementation is complete and committed.
-            If you cannot complete the task, move the card to "Blocked" and explain why in a comment.
+  - id: in-progress
+    label: "status:in-progress"
+    color: "#E36209"
+    model: "claude-sonnet-4-6"
+    circuit_breaker: 3
+    prompt: |
+      You are the implementation agent...
 ```
 
------
+Adding a new stage = adding an entry to this file. No workflow changes needed.
 
-### `agent-review.yml`
+## Onboarding a Repo
 
-```yaml
-name: Review Agent
+Click "Onboard Repo" in the board UI to automatically create:
+- Status labels with colors
+- `.b2a/pipeline.yml`
+- `.github/workflows/b2a-agent.yml`
 
-on:
-  projects_v2_item:
-    types: [edited]
+You also need to set `CLAUDE_CODE_OAUTH_TOKEN` as a repository secret (run `claude setup-token` locally to generate it).
 
-jobs:
-  review:
-    if: github.event.changes.field_value.field_name == 'Status' &&
-        github.event.changes.field_value.to.name == 'Review'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
+## Circuit Breaker
 
-    steps:
-      - uses: actions/checkout@v4
+If the review agent rejects implementation 3+ times, the card automatically moves to **Blocked** for human intervention. This prevents infinite agent loops.
 
-      - name: Run Review Agent
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            You are the code review agent for the b2a pipeline.
+## Column Colors
 
-            Your job:
-            1. Run `gh issue view ${{ github.event.projects_v2_item.content_node_id }} --json title,body,comments,labels` to read the full issue and history.
-            2. Review the code changes related to this issue against the standards in CLAUDE.md.
-            3. Check for: correctness, edge cases, test coverage, code style, security issues.
+| Column | Color | Label |
+|---|---|---|
+| Todo | Grey | _(none)_ |
+| Planning | Blue | `status:planning` |
+| In Progress | Orange | `status:in-progress` |
+| Review | Purple | `status:review` |
+| Done | Green | `status:done` |
+| Blocked | Red | `status:blocked` |
 
-            If the implementation is acceptable:
-            - Post an approval comment on the issue
-            - Move the card to "Testing"
+## Requirements
 
-            If changes are required:
-            - Post a detailed comment on the issue listing every specific change needed
-            - Add a label `cycles:N` where N increments the existing cycle count (check existing labels)
-            - Move the card back to "In Progress"
+- Docker Desktop
+- GitHub Personal Access Token (see below)
+- `CLAUDE_CODE_OAUTH_TOKEN` secret on the target repo (run `claude setup-token` to generate)
 
-            Be specific in feedback. The implementation agent only has your comments to work from.
-```
+## GitHub Personal Access Token (PAT)
 
------
+The board needs a PAT to interact with issues, labels, and repo contents.
 
-### `agent-test.yml`
+### Creating a PAT
 
-```yaml
-name: Test Agent
+1. Go to [GitHub Settings → Developer settings → Personal access tokens](https://github.com/settings/tokens) (classic) or [Fine-grained tokens](https://github.com/settings/personal-access-tokens) (newer)
+2. Generate a new token with the required permissions below
+3. Copy it into your `.env` file as `GITHUB_TOKEN`
 
-on:
-  projects_v2_item:
-    types: [edited]
+### Required Permissions
 
-jobs:
-  test:
-    if: github.event.changes.field_value.field_name == 'Status' &&
-        github.event.changes.field_value.to.name == 'Testing'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
+**Classic PAT:**
+- `repo` scope (full control of private repositories) — covers issues, labels, and contents
 
-    steps:
-      - uses: actions/checkout@v4
+If the repo is **public** and you don't need the onboard feature, `public_repo` alone is sufficient.
 
-      - name: Run Test Agent
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            You are the test agent for the b2a pipeline.
+**Fine-grained PAT:**
 
-            Your job:
-            1. Run `gh issue view ${{ github.event.projects_v2_item.content_node_id }} --json title,body,comments,labels` to read context.
-            2. Run the full test suite using the appropriate command for this project (check CLAUDE.md or package.json/Makefile).
-            3. If all tests pass:
-               - Post a comment summarising test results
-               - Move the card to "Done"
-            4. If tests fail:
-               - Post a comment with the specific failures
-               - Move the card back to "In Progress" for the implementation agent to fix
-               - Add a `cycles:N` label incrementing the cycle count
+| Permission | Access | Used For |
+|---|---|---|
+| Issues | Read and Write | Reading issues, applying/removing labels, posting comments |
+| Contents | Read and Write | Creating pipeline config and workflow files (onboard feature) |
 
-            Do not move to Done unless the test suite passes cleanly.
-```
-
------
-
-### `agent-blocked.yml`
-
-```yaml
-name: Blocked Notification
-
-on:
-  projects_v2_item:
-    types: [edited]
-
-jobs:
-  notify:
-    if: github.event.changes.field_value.field_name == 'Status' &&
-        github.event.changes.field_value.to.name == 'Blocked'
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-
-    steps:
-      - name: Notify human
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh issue comment ${{ github.event.projects_v2_item.content_node_id }} \
-            --body "🚨 This card has been moved to **Blocked** and requires human intervention. Please review the issue history, resolve the blocker, and move the card to the appropriate column to resume the pipeline."
-```
-
------
-
-## CLAUDE.md
-
-The repo-level `CLAUDE.md` should include:
-
-- Project description and purpose
-- Language/framework and version
-- How to run tests (exact command)
-- Coding standards and conventions
-- Commit message format
-- Any constraints agents must respect (e.g. never commit to main directly, always reference issue number)
-- How to find the project ID and field IDs for `gh project item-edit` calls
-
-Example:
-
-```markdown
-# b2a
-
-This repository implements the board-to-agent pipeline.
-
-## Stack
-- Node.js 20
-- Tests: `npm test`
-
-## Conventions
-- Commits: `fix: description (#ISSUE_NUMBER)`
-- Never commit directly to main
-- All PRs must reference an issue
-
-## Project Board
-- Project ID: PVT_xxxxxxxxxxxx
-- Status Field ID: PVTSSF_xxxxxxxxxxxx
-- Column option IDs:
-  - In Progress: xxxxxxxxxxxx
-  - Review: xxxxxxxxxxxx
-  - Testing: xxxxxxxxxxxx
-  - Done: xxxxxxxxxxxx
-  - Blocked: xxxxxxxxxxxx
-```
-
------
-
-## Circuit Breaker Logic
-
-### Problem
-
-Without a circuit breaker, the implementation and review agents can loop indefinitely if the review agent keeps rejecting the implementation agent's output.
-
-### Mechanism
-
-- The review agent adds a label `cycles:1`, `cycles:2`, `cycles:3` each time it sends work back
-- The implementation agent checks for any `cycles:` label at the start of each run
-- If the count exceeds **3**, the card is moved to **Blocked** and a comment is posted for human intervention
-- Labels are not removed — they accumulate as an audit trail
-- A human resolving a blocked card should remove `cycles:` labels before moving the card forward
-
-### Label Format
-
-```
-cycles:1
-cycles:2
-cycles:3
-```
-
------
-
-## Human Intervention
-
-Humans can participate at any point by:
-
-- **Commenting on the issue** — the next agent run will see the comment and factor it into its work
-- **Moving a card manually** — triggers the appropriate workflow for that column
-- **Moving a Blocked card** — after resolving the blocker, move the card to the appropriate column (usually In Progress) to restart the pipeline
-- **Editing the issue body** — agents always re-read the full issue on each run
-
------
-
-## Getting the Project Field IDs
-
-The `gh project item-edit` command requires node IDs for the project, status field, and each option. Retrieve them with:
+## Development
 
 ```bash
-# List projects
-gh project list --owner YOUR_ORG
+# Run with hot reload (uses docker-compose.override.yml)
+docker compose up
 
-# Get field and option IDs
-gh api graphql -f query='
-{
-  node(id: "PROJECT_NODE_ID") {
-    ... on ProjectV2 {
-      fields(first: 20) {
-        nodes {
-          ... on ProjectV2SingleSelectField {
-            id
-            name
-            options { id name }
-          }
-        }
-      }
-    }
-  }
-}'
+# Or run natively
+cd board
+npm install
+npm run dev
 ```
-
-Store all IDs in `CLAUDE.md` so agents can reference them without making API calls.
-
------
-
-## Implementation Order for Claude Code
-
-Build in this order:
-
-1. **Create the GitHub Project** with the correct columns and link it to the repo
-1. **Write `CLAUDE.md`** with project context and all field IDs populated
-1. **Implement `agent-blocked.yml`** first — simplest workflow, good smoke test
-1. **Implement `agent-implement.yml`** — core agent, most complex
-1. **Implement `agent-review.yml`**
-1. **Implement `agent-test.yml`**
-1. **End-to-end test** — create an issue, add it to the board, move to In Progress, observe the pipeline
-
------
-
-## Known Limitations & Notes
-
-- **Organization required**: The `projects_v2_item` workflow trigger is only available for **organization-owned repositories**. It does not work for user-owned repositories (e.g. `username/repo`). If you use a personal repo, GitHub Actions will reject the trigger with "Unexpected value 'projects_v2_item'". To use this pipeline, create a free GitHub organization and host the repo there. Organizations are free and require no purchase — they are simply a grouping of repos with access to org-level features like project board webhook events.
-- `projects_v2_item` triggers require the workflow to be on the default branch to fire
-- Field IDs are stable but option IDs can change if columns are deleted and recreated — keep CLAUDE.md updated
-- The `gh project item-edit` command syntax may require `--project-id` to be the numeric project number rather than the node ID depending on `gh` version — verify with `gh project list`
-- Claude Code OAuth token is tied to your Claude.ai subscription tier — Max plan recommended for longer agentic runs
-- Runs on `ubuntu-latest` (GitHub-hosted) by default; swap `runs-on` to your ARC runner label if using self-hosted K8s runners

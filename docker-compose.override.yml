@@ -1,0 +1,9 @@
+services:
+  board:
+    command: npm run dev
+    volumes:
+      - ./board:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - WATCHPACK_POLLING=true
