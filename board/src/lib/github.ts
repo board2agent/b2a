@@ -18,14 +18,17 @@ export async function getIssues(): Promise<BoardIssue[]> {
   const octokit = getOctokit();
   const { owner, repo } = getRepo();
 
-  const { data } = await octokit.issues.listForRepo({
-    owner,
-    repo,
-    state: "open",
-    per_page: 100,
-    sort: "updated",
-    direction: "desc",
-  });
+  // Fetch open issues and recently closed issues (for Done column)
+  const [openRes, closedRes] = await Promise.all([
+    octokit.issues.listForRepo({
+      owner, repo, state: "open", per_page: 100, sort: "updated", direction: "desc",
+    }),
+    octokit.issues.listForRepo({
+      owner, repo, state: "closed", per_page: 30, sort: "updated", direction: "desc",
+    }),
+  ]);
+
+  const data = [...openRes.data, ...closedRes.data];
 
   // Filter out pull requests (GitHub API returns them mixed with issues)
   return data
@@ -91,6 +94,27 @@ export async function moveIssue(
   if (addLabel) {
     await octokit.issues.addLabels({ owner, repo, issue_number: issueNumber, labels: [addLabel] });
   }
+}
+
+export async function createIssue(title: string): Promise<BoardIssue> {
+  const octokit = getOctokit();
+  const { owner, repo } = getRepo();
+
+  const { data: issue } = await octokit.issues.create({ owner, repo, title });
+
+  return {
+    number: issue.number,
+    title: issue.title,
+    body: issue.body ?? null,
+    state: issue.state,
+    assignee: issue.assignee
+      ? { login: issue.assignee.login, avatar_url: issue.assignee.avatar_url }
+      : null,
+    labels: [],
+    created_at: issue.created_at,
+    updated_at: issue.updated_at,
+    html_url: issue.html_url,
+  };
 }
 
 export async function createLabel(name: string, color: string, description?: string): Promise<void> {

@@ -24,11 +24,12 @@ export const DEFAULT_PIPELINE_YML = `pipeline:
          \\\`\\\`\\\`
 
       Do not advance until the plan is posted.
-      If the issue is unclear or you cannot create a plan:
+      If the issue is unclear, you cannot create a plan, or you encounter repeated permission denials or errors:
          \\\`\\\`\\\`
+         gh issue comment $ISSUE --body "Moving to blocked: <explain the reason>"
          gh issue edit $ISSUE --remove-label "status:planning" --add-label "status:blocked"
          \\\`\\\`\\\`
-      and explain why in a comment.
+      Do not retry the same failing action more than twice. If something is denied or broken, move to blocked immediately.
 
   - id: in-progress
     label: "status:in-progress"
@@ -42,22 +43,32 @@ export const DEFAULT_PIPELINE_YML = `pipeline:
 
       Your job:
       1. Read this issue fully, including all comments (especially any planning or review feedback).
-      2. Implement the changes described in the issue. Follow the standards in CLAUDE.md.
-      3. If there is prior review feedback in the issue comments, address all of it.
-      4. Write or update tests as appropriate.
-      5. Commit your changes with a meaningful commit message referencing the issue number.
-      6. Post a comment on the issue summarising what you did.
-      7. Advance the pipeline by swapping labels:
+      2. Create a feature branch from main:
+         \\\`\\\`\\\`
+         git checkout -b feat/issue-$ISSUE-short-description main
+         \\\`\\\`\\\`
+      3. Implement the changes described in the issue. Follow the standards in CLAUDE.md.
+      4. If there is prior review feedback in the issue comments, address all of it.
+      5. Write or update tests as appropriate.
+      6. Commit your changes with a meaningful commit message referencing the issue number (format: \\\`type: description (#$ISSUE)\\\`).
+      7. Push the branch and create a pull request (or update the existing one):
+         \\\`\\\`\\\`
+         git push -u origin HEAD
+         gh pr create --title "type: description (#$ISSUE)" --body "Closes #$ISSUE" --base main || gh pr edit --body "Closes #$ISSUE"
+         \\\`\\\`\\\`
+      8. Post a comment on the issue summarising what you did and linking the PR.
+      9. Advance the pipeline by swapping labels:
          \\\`\\\`\\\`
          gh issue edit $ISSUE --remove-label "status:in-progress" --add-label "status:review"
          \\\`\\\`\\\`
 
-      Do not advance until the implementation is complete and committed.
-      If you cannot complete the task:
+      Do not advance until the implementation is complete, committed, and a PR is open.
+      If you cannot complete the task, encounter repeated permission denials, or hit errors you cannot resolve:
          \\\`\\\`\\\`
+         gh issue comment $ISSUE --body "Moving to blocked: <explain the reason>"
          gh issue edit $ISSUE --remove-label "status:in-progress" --add-label "status:blocked"
          \\\`\\\`\\\`
-      and explain why in a comment.
+      Do not retry the same failing action more than twice. If something is denied or broken, move to blocked immediately.
 
   - id: review
     label: "status:review"
@@ -71,21 +82,35 @@ export const DEFAULT_PIPELINE_YML = `pipeline:
 
       Your job:
       1. Read this issue fully, including all comments and history.
-      2. Review the code changes related to this issue against the standards in CLAUDE.md.
-      3. Run the test suite (check CLAUDE.md for the test command). All tests must pass.
+      2. Find the pull request linked to this issue:
+         \\\`\\\`\\\`
+         gh pr list --search "$ISSUE" --state open --json number,title,url --jq '.[0]'
+         \\\`\\\`\\\`
+      3. Review the PR diff against the standards in CLAUDE.md:
+         \\\`\\\`\\\`
+         gh pr diff <PR_NUMBER>
+         \\\`\\\`\\\`
       4. Check for: correctness, edge cases, test coverage, code style, security issues.
-      5. Run smoke tests or playwright tests if available.
+      5. Run the test suite if available (check CLAUDE.md for the test command).
 
       If the implementation is acceptable:
-      - Post an approval comment on the issue.
-      - Remove the review label and close the issue:
+      - Post an approval comment on the PR.
+      - Merge the PR:
         \\\`\\\`\\\`
-        gh issue edit $ISSUE --remove-label "status:review"
+        gh pr merge <PR_NUMBER> --squash --delete-branch
+        \\\`\\\`\\\`
+      - Move the card to Done and close the issue:
+        \\\`\\\`\\\`
+        gh issue edit $ISSUE --remove-label "status:review" --add-label "status:done"
         gh issue close $ISSUE --reason completed
         \\\`\\\`\\\`
 
       If changes are required:
-      - Post a detailed comment listing every specific change needed.
+      - Post a detailed review comment on the PR listing every specific change needed:
+        \\\`\\\`\\\`
+        gh pr comment <PR_NUMBER> --body "<detailed feedback>"
+        \\\`\\\`\\\`
+      - Also post a summary comment on the issue so the implementation agent sees it.
       - Determine the current cycle count from existing cycles:N labels and add the next label:
         \\\`\\\`\\\`
         gh issue edit $ISSUE --add-label "cycles:N"
@@ -96,6 +121,13 @@ export const DEFAULT_PIPELINE_YML = `pipeline:
         \\\`\\\`\\\`
 
       Be specific in feedback. The implementation agent only has your comments to work from.
+
+      If you encounter repeated permission denials or errors you cannot resolve:
+         \\\`\\\`\\\`
+         gh issue comment $ISSUE --body "Moving to blocked: <explain the reason>"
+         gh issue edit $ISSUE --remove-label "status:review" --add-label "status:blocked"
+         \\\`\\\`\\\`
+      Do not retry the same failing action more than twice. If something is denied or broken, move to blocked immediately.
 
 columns:
   - id: todo
@@ -171,7 +203,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         env:
           ANTHROPIC_MODEL: \${{ steps.stage.outputs.model }}
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
         with:
           claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: \${{ steps.stage.outputs.prompt }}
+          claude_args: "--allowedTools Bash Read Write Edit Glob Grep"
+          allowed_bots: "claude[bot],github-actions[bot]"
 `;

@@ -13,9 +13,12 @@ export const COLUMN_ORDER = COLUMNS.map((c) => c.id);
 
 const STATUS_PREFIX = "status:";
 
-export function getColumnForIssue(labels: { name: string }[]): string {
+export function getColumnForIssue(labels: { name: string }[], state?: string): string {
   const statusLabel = labels.find((l) => l.name.startsWith(STATUS_PREFIX));
-  if (!statusLabel) return "todo";
+  if (!statusLabel) {
+    // Closed issues with no status label belong in Done
+    return state === "closed" ? "done" : "todo";
+  }
   const col = COLUMNS.find((c) => c.label === statusLabel.name);
   return col ? col.id : "todo";
 }

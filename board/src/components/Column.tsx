@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import { Droppable } from "@hello-pangea/dnd";
 import { BoardIssue, ColumnDef } from "@/lib/types";
 import Card from "./Card";
@@ -8,9 +9,27 @@ interface ColumnProps {
   columnDef: ColumnDef;
   issues: BoardIssue[];
   onCardClick: (issue: BoardIssue) => void;
+  onCreateIssue?: (title: string) => Promise<void>;
 }
 
-export default function Column({ columnDef, issues, onCardClick }: ColumnProps) {
+export default function Column({ columnDef, issues, onCardClick, onCreateIssue }: ColumnProps) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [title, setTitle] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = useCallback(async () => {
+    const trimmed = title.trim();
+    if (!trimmed || !onCreateIssue) return;
+    setSubmitting(true);
+    try {
+      await onCreateIssue(trimmed);
+      setTitle("");
+      setIsAdding(false);
+    } finally {
+      setSubmitting(false);
+    }
+  }, [title, onCreateIssue]);
+
   return (
     <div className="flex flex-col w-72 flex-shrink-0">
       <div
@@ -26,9 +45,20 @@ export default function Column({ columnDef, issues, onCardClick }: ColumnProps) 
             {columnDef.title}
           </h2>
         </div>
-        <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded-full">
-          {issues.length}
-        </span>
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded-full">
+            {issues.length}
+          </span>
+          {onCreateIssue && !isAdding && (
+            <button
+              onClick={() => setIsAdding(true)}
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-lg leading-none px-1"
+              title="Add issue"
+            >
+              +
+            </button>
+          )}
+        </div>
       </div>
 
       <Droppable droppableId={columnDef.id}>
@@ -42,6 +72,38 @@ export default function Column({ columnDef, issues, onCardClick }: ColumnProps) 
                 : "bg-gray-50 dark:bg-gray-900"
             }`}
           >
+            {isAdding && (
+              <div className="mb-2 p-2 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+                <input
+                  autoFocus
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleSubmit();
+                    if (e.key === "Escape") { setIsAdding(false); setTitle(""); }
+                  }}
+                  placeholder="Issue title..."
+                  disabled={submitting}
+                  className="w-full text-sm bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400"
+                />
+                <div className="flex justify-end gap-1 mt-2">
+                  <button
+                    onClick={() => { setIsAdding(false); setTitle(""); }}
+                    className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSubmit}
+                    disabled={!title.trim() || submitting}
+                    className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-50"
+                  >
+                    {submitting ? "..." : "Add"}
+                  </button>
+                </div>
+              </div>
+            )}
             {issues.map((issue, index) => (
               <Card
                 key={issue.number}

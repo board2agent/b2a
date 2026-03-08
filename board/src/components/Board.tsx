@@ -65,6 +65,19 @@ export default function Board() {
     [displayData, setDragging]
   );
 
+  const handleCreateIssue = useCallback(async (title: string) => {
+    const res = await fetch("/api/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Failed to create issue");
+    }
+    refresh();
+  }, [refresh]);
+
   const handleOnboard = useCallback(async () => {
     if (!confirm("This will create labels, pipeline config, and workflow in the repo. Continue?")) {
       return;
@@ -134,6 +147,7 @@ export default function Board() {
                   columnDef={column.def}
                   issues={column.issues}
                   onCardClick={setSelectedIssue}
+                  onCreateIssue={colId === "todo" ? handleCreateIssue : undefined}
                 />
               );
             })}
