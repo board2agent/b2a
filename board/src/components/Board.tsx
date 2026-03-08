@@ -9,7 +9,7 @@ import CardDetail from "./CardDetail";
 import ConfigBar from "./ConfigBar";
 
 export default function Board() {
-  const { data, error, lastUpdated, refresh, setDragging } = usePolling(
+  const { data, error, lastUpdated, refresh, setDragging, markMoved } = usePolling(
     Number(process.env.NEXT_PUBLIC_POLL_INTERVAL_MS) || 5000
   );
   const [selectedIssue, setSelectedIssue] = useState<BoardIssue | null>(null);
@@ -23,12 +23,14 @@ export default function Board() {
 
   const onDragEnd = useCallback(
     async (result: DropResult) => {
-      setDragging(false);
-
-      if (!result.destination || !displayData) return;
+      if (!result.destination || !displayData) {
+        setDragging(false);
+        return;
+      }
 
       const { source, destination, draggableId } = result;
       if (source.droppableId === destination.droppableId && source.index === destination.index) {
+        setDragging(false);
         return;
       }
 
@@ -36,13 +38,23 @@ export default function Board() {
       const fromColumnId = source.droppableId;
       const toColumnId = destination.droppableId;
 
-      // Optimistic update
+      // 1. Apply optimistic update BEFORE ending drag so displayData never
+      //    flashes back to stale polling state.
       const newData = structuredClone(displayData);
       const fromColumn = newData.columns[fromColumnId];
       const toColumn = newData.columns[toColumnId];
       const [movedIssue] = fromColumn.issues.splice(source.index, 1);
       toColumn.issues.splice(destination.index, 0, movedIssue);
       setOptimisticData(newData);
+
+      // 2. Invalidate any in-flight or queued poll results from before the move.
+      markMoved();
+
+      // 3. End drag — pending poll data has already been discarded by markMoved.
+      setDragging(false);
+
+      // Safety net: clear optimistic state after 10 s in case refresh hangs.
+      const safetyTimer = setTimeout(() => setOptimisticData(null), 10000);
 
       try {
         const res = await fetch("/api/move", {
@@ -54,15 +66,18 @@ export default function Board() {
         if (!res.ok) {
           throw new Error("Move failed");
         }
-      } catch {
-        // Revert optimistic update
-        setOptimisticData(null);
-      }
 
-      // Clear optimistic state after a short delay to let polling catch up
-      setTimeout(() => setOptimisticData(null), 2000);
+        // 4. Move succeeded — fetch fresh server state, then clear optimistic data.
+        await refresh();
+        setOptimisticData(null);
+      } catch {
+        // Revert optimistic update on failure
+        setOptimisticData(null);
+      } finally {
+        clearTimeout(safetyTimer);
+      }
     },
-    [displayData, setDragging]
+    [displayData, setDragging, markMoved, refresh]
   );
 
   const handleOnboard = useCallback(async () => {

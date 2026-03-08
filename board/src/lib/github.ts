@@ -70,6 +70,15 @@ export async function getIssueComments(issueNumber: number): Promise<IssueCommen
   }));
 }
 
+export async function getIssueLabels(issueNumber: number): Promise<string[]> {
+  const octokit = getOctokit();
+  const { owner, repo } = getRepo();
+  const { data } = await octokit.issues.get({ owner, repo, issue_number: issueNumber });
+  return (data.labels || [])
+    .filter((l): l is { name: string } => typeof l === "object" && l !== null && "name" in l)
+    .map((l) => l.name!);
+}
+
 export async function moveIssue(
   issueNumber: number,
   removeLabels: string[],
