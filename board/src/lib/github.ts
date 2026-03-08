@@ -121,6 +121,34 @@ export async function createLabel(name: string, color: string, description?: str
   }
 }
 
+export async function createIssue(title: string, body?: string): Promise<BoardIssue> {
+  const octokit = getOctokit();
+  const { owner, repo } = getRepo();
+
+  const { data } = await octokit.issues.create({
+    owner,
+    repo,
+    title,
+    body,
+  });
+
+  return {
+    number: data.number,
+    title: data.title,
+    body: data.body ?? null,
+    state: data.state,
+    assignee: data.assignee
+      ? { login: data.assignee.login, avatar_url: data.assignee.avatar_url }
+      : null,
+    labels: (data.labels || [])
+      .filter((l): l is { name: string; color: string } => typeof l === "object" && l !== null && "name" in l)
+      .map((l) => ({ name: l.name!, color: l.color || "ededed" })),
+    created_at: data.created_at,
+    updated_at: data.updated_at,
+    html_url: data.html_url,
+  };
+}
+
 export async function createOrUpdateFile(
   path: string,
   content: string,

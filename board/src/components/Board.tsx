@@ -134,6 +134,7 @@ export default function Board() {
                   columnDef={column.def}
                   issues={column.issues}
                   onCardClick={setSelectedIssue}
+                  onRefresh={refresh}
                 />
               );
             })}

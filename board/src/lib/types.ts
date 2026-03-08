@@ -35,6 +35,11 @@ export interface MoveRequest {
   toColumnId: string;
 }
 
+export interface CreateIssueRequest {
+  title: string;
+  body?: string;
+}
+
 export interface IssueComment {
   id: number;
   body: string;
