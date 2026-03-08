@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Droppable } from "@hello-pangea/dnd";
 import { BoardIssue, ColumnDef } from "@/lib/types";
 import Card from "./Card";
@@ -9,26 +9,54 @@ interface ColumnProps {
   columnDef: ColumnDef;
   issues: BoardIssue[];
   onCardClick: (issue: BoardIssue) => void;
-  onCreateIssue?: (title: string) => Promise<void>;
+  onRefresh?: () => void;
 }
 
-export default function Column({ columnDef, issues, onCardClick, onCreateIssue }: ColumnProps) {
-  const [isAdding, setIsAdding] = useState(false);
+export default function Column({ columnDef, issues, onCardClick, onRefresh }: ColumnProps) {
+  const isTodo = columnDef.id === "todo";
+  const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = useCallback(async () => {
-    const trimmed = title.trim();
-    if (!trimmed || !onCreateIssue) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+
     setSubmitting(true);
+    setError(null);
+
     try {
-      await onCreateIssue(trimmed);
+      const res = await fetch("/api/issues/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title.trim(), body: body.trim() || undefined }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to create issue");
+      }
+
+      // Reset and close form, then trigger a board refresh
       setTitle("");
-      setIsAdding(false);
+      setBody("");
+      setShowForm(false);
+      onRefresh?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create issue");
     } finally {
       setSubmitting(false);
     }
-  }, [title, onCreateIssue]);
+  };
+
+  const handleCancel = () => {
+    setTitle("");
+    setBody("");
+    setError(null);
+    setShowForm(false);
+  };
 
   return (
     <div className="flex flex-col w-72 flex-shrink-0">
@@ -49,11 +77,11 @@ export default function Column({ columnDef, issues, onCardClick, onCreateIssue }
           <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded-full">
             {issues.length}
           </span>
-          {onCreateIssue && !isAdding && (
+          {isTodo && (
             <button
-              onClick={() => setIsAdding(true)}
-              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-lg leading-none px-1"
-              title="Add issue"
+              onClick={() => setShowForm((v) => !v)}
+              title="Create issue"
+              className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 w-5 h-5 flex items-center justify-center rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-base leading-none"
             >
               +
             </button>
@@ -72,38 +100,48 @@ export default function Column({ columnDef, issues, onCardClick, onCreateIssue }
                 : "bg-gray-50 dark:bg-gray-900"
             }`}
           >
-            {isAdding && (
-              <div className="mb-2 p-2 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+            {showForm && (
+              <form
+                onSubmit={handleSubmit}
+                className="mb-2 p-2 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm"
+              >
                 <input
-                  autoFocus
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleSubmit();
-                    if (e.key === "Escape") { setIsAdding(false); setTitle(""); }
-                  }}
-                  placeholder="Issue title..."
-                  disabled={submitting}
-                  className="w-full text-sm bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400"
+                  placeholder="Issue title"
+                  autoFocus
+                  className="w-full text-sm px-2 py-1 mb-2 border border-gray-200 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                 />
-                <div className="flex justify-end gap-1 mt-2">
+                <textarea
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder="Description (optional, supports Markdown)"
+                  rows={3}
+                  className="w-full text-sm px-2 py-1 mb-2 border border-gray-200 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+                />
+                {error && (
+                  <p className="text-xs text-red-500 mb-2">{error}</p>
+                )}
+                <div className="flex gap-1 justify-end">
                   <button
-                    onClick={() => { setIsAdding(false); setTitle(""); }}
-                    className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                    type="button"
+                    onClick={handleCancel}
+                    className="text-xs px-2 py-1 rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={handleSubmit}
+                    type="submit"
                     disabled={!title.trim() || submitting}
-                    className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-50"
+                    className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
-                    {submitting ? "..." : "Add"}
+                    {submitting ? "Creating…" : "Create"}
                   </button>
                 </div>
-              </div>
+              </form>
             )}
+
             {issues.map((issue, index) => (
               <Card
                 key={issue.number}

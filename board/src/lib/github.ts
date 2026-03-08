@@ -105,24 +105,31 @@ export async function moveIssue(
   }
 }
 
-export async function createIssue(title: string): Promise<BoardIssue> {
+export async function createIssue(title: string, body?: string): Promise<BoardIssue> {
   const octokit = getOctokit();
   const { owner, repo } = getRepo();
 
-  const { data: issue } = await octokit.issues.create({ owner, repo, title });
+  const { data } = await octokit.issues.create({
+    owner,
+    repo,
+    title,
+    body,
+  });
 
   return {
-    number: issue.number,
-    title: issue.title,
-    body: issue.body ?? null,
-    state: issue.state,
-    assignee: issue.assignee
-      ? { login: issue.assignee.login, avatar_url: issue.assignee.avatar_url }
+    number: data.number,
+    title: data.title,
+    body: data.body ?? null,
+    state: data.state,
+    assignee: data.assignee
+      ? { login: data.assignee.login, avatar_url: data.assignee.avatar_url }
       : null,
-    labels: [],
-    created_at: issue.created_at,
-    updated_at: issue.updated_at,
-    html_url: issue.html_url,
+    labels: (data.labels || [])
+      .filter((l): l is { name: string; color: string } => typeof l === "object" && l !== null && "name" in l)
+      .map((l) => ({ name: l.name!, color: l.color || "ededed" })),
+    created_at: data.created_at,
+    updated_at: data.updated_at,
+    html_url: data.html_url,
   };
 }
 
